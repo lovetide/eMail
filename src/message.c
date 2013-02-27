@@ -314,6 +314,44 @@ attachFiles(const char *boundary, dstrbuf *out)
 	return SUCCESS;
 }
 
+/*
+ * According http://tools.ietf.org/html/rfc5321#section-4.5.2, if 1st character of a line is '.', it should be duplicated.
+ * Data transparency is only needed in plain content (text or HTML) and quoted-printable content, GPG content, BASE64 content needn't it, because normally there're no '.' in it.
+ *
+ * Data transparency SHOULD be processed in smtpSendData() in smtpcommands.c (when "sending" email), but it's better processed here when "writing" mail, because not all data need to be transparency, as mentioned above.
+ *
+ * See also mimeQpEncodeString in mimeutils.c
+ *
+ * dst: Destination string buffer
+ * src: The whole source message. Use this function on separated messages is not recommended.
+ */
+static int provisionForDataTransparency (dstrbuf *dst, const char *src)
+{
+	int nLen = strlen (src);
+	const char *pLeft = src, *pRight = src;
+	bool bNewLine = true;
+	// Sample string: ".aaa\n.bbb.c\ncc.ddd"
+	for (pRight=src; pRight-pLeft<=nLen; pRight++)
+	{
+		if (*pRight=='\r' || *pRight=='\n')
+		{
+			bNewLine = true;
+			continue;
+		}
+
+		if (*pRight=='.' && bNewLine)
+		{
+			dsbnCat(dst, pLeft, pRight-pLeft+1);	// "." and "aaa\n."
+			dsbCatChar (dst, '.');
+			pRight ++;
+			pLeft = pRight;
+		}
+		bNewLine = false;
+	}
+	dsbnCat(dst, pLeft, pRight-pLeft+1);	// the remaining: "bbb.c\ncc.ddd"
+	return SUCCESS;
+}
+
 /** 
  * Makes a standard plain text message while taking into
  * account the MIME message types and boundary's needed
@@ -338,11 +376,11 @@ makeMessage(dstrbuf *in, dstrbuf *out, const char *border, CharSetType charset)
 		} else if (Mopts.html) {
 			dsbPrintf(out, "Content-Type: text/html\r\n\r\n");
 			enc = DSB_NEW;
-			dsbCat(enc, in->str);
+			provisionForDataTransparency (enc, in->str);
 		} else {
 			dsbPrintf(out, "Content-Type: text/plain\r\n\r\n");
 			enc = DSB_NEW;
-			dsbCat(enc, in->str);
+			provisionForDataTransparency (enc, in->str);
 		}
 	} else {
 		if (charset == IS_UTF8) {
@@ -351,7 +389,7 @@ makeMessage(dstrbuf *in, dstrbuf *out, const char *border, CharSetType charset)
 			enc = mimeQpEncodeString((u_char *)in->str, true);
 		} else {
 			enc = DSB_NEW;
-			dsbCat(enc, in->str);
+			provisionForDataTransparency (enc, in->str);
 		}
 	}
 	dsbPrintf(out, "%s\r\n", enc->str);

@@ -336,6 +336,15 @@ mimeQpEncodeString(const u_char *str, bool wrap)
 			dsbPrintf(out, "\r\n");
 			line_len = 0;
 			break;
+		case '.':
+			if (line_len == 0)
+			{
+				// If the 1st character in a line is '.', then it should be duplicated.
+				// See http://tools.ietf.org/html/rfc5321#section-4.5.2
+				qpStdout('.', &line_len, out, wrap);
+			}
+			qpStdout('.', &line_len, out, wrap);
+			break;
 		default:
 			if (qpIsEncodable(*str)) {
 				qpEncout(*str, &line_len, out, wrap);
