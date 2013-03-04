@@ -165,14 +165,14 @@ formatEmailAddr(char *name, char *address)
  * if so, return TRUE, else return FALSE 
 **/
 int
-validateEmail(const char *email_addy)
+validateEmail(const char *email_addr)
 {
 	char *copy;
 	char *name, *domain;
 	int retval = SUCCESS;
 
-	/* make a copy of email_addy so we don't ruin it with strtok */
-	copy = xstrdup(email_addy);
+	/* make a copy of email_addr so we don't ruin it with strtok */
+	copy = xstrdup(email_addr);
 
 	/* Get the name before the @ character. */
 	name = strtok(copy, "@");

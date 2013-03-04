@@ -14,7 +14,7 @@ mandir = @mandir@
 sysconfdir = @sysconfdir@
 datarootdir = @datarootdir@
 
-FILES = email.o addr_parse.o addy_book.o conf.o error.o execgpg.o file_io.o \
+FILES = email.o addr_parse.o addr_book.o conf.o error.o execgpg.o file_io.o \
         message.o mimeutils.o processmail.o progress_bar.o \
 	remotesmtp.o sig_file.o smtpcommands.o utils.o
 
