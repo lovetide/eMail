@@ -25,5 +25,6 @@
 
 dstrbuf *readInput(void);
 dstrbuf *editEmail(void);
+dstrbuf *getFileContents(const char *filename);
 
 #endif /* FILE_IO_H */

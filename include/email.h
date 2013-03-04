@@ -79,6 +79,15 @@ struct mailer_options {
 	dlist to;
 	dlist cc;
 	dlist bcc;
+
+	dlist related_attach;
+	char *alt_html_filename;
+	const char *transfer_encoding;
+	char *subject_encoding;
+	char *body_encoding;
+	char *mail_from_encoding;
+	char *mail_to_encoding;
+	char *convert_encoding_to;
 } Mopts;
 
 void usage(void);

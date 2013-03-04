@@ -43,5 +43,6 @@ void chomp(char *str);
 int copyUpTo(dstrbuf *buf, int stop, FILE *in);
 CharSetType getCharSet(const u_char *str);
 dstrbuf *encodeUtf8String(const u_char *str, bool use_qp);
+dstrbuf *detectCharSetAndEncode (char *str);
 
 #endif /* __UTILS_H */

@@ -31,6 +31,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <pwd.h>
+#include <iconv.h>
 
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -177,6 +178,18 @@ encodeUtf8String(const u_char *str, bool use_qp)
 		dsbPrintf(dsb, "\r\n =?utf-8?b?%s?=", enc->str);
 		dsbDestroy(enc);
 		i += newlen;
+	}
+	return dsb;
+}
+
+dstrbuf *detectCharSetAndEncode (char *str)
+{
+	dstrbuf *dsb = NULL;
+	CharSetType cs = getCharSet((u_char *)str);
+	if (cs == IS_UTF8) {
+		dsb = encodeUtf8String((u_char *)str, false);
+	} else if (cs == IS_PARTIAL_UTF8) {
+		dsb = encodeUtf8String((u_char *)str, true);
 	}
 	return dsb;
 }
@@ -371,6 +384,9 @@ properExit(int sig)
 	}
 	if (Mopts.bcc) {
 		dlDestroy(Mopts.bcc);
+	}
+	if (Mopts.related_attach) {
+		dlDestroy(Mopts.related_attach);
 	}
 
 	dhDestroy(table);

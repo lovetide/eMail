@@ -130,7 +130,7 @@ openEditor(const char *editor, const char *filename)
 	return 0;
 }
 
-static dstrbuf *
+dstrbuf *
 getFileContents(const char *filename)
 {
 	dstrbuf *tmp=NULL, *buf=NULL;
