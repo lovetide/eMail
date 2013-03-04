@@ -31,7 +31,7 @@
 #include "email.h"
 #include "addr_parse.h"
 #include "utils.h"
-#include "addy_book.h"
+#include "addr_book.h"
 #include "error.h"
 
 /*
