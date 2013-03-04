@@ -104,11 +104,12 @@ callGpg(dstrbuf *input, GpgCallType call_type)
 	fdfile = fdopen(mkstemp(filename), "r");
 	fdtmp = fdopen(mkstemp(tmpfile), "w");
 	fwrite(input->str, 1, input->len, fdtmp);
+	fclose(fdtmp);
 
 	gpg = expandPath(gpg_bin);
 	cmd = DSB_NEW;
 	dsbPrintf(cmd, "%s -a -o '%s' --no-secmem-warning --passphrase-fd 0 "
-		" --no-tty", gpg->str, filename);
+		" ", gpg->str, filename);
 	if ((call_type & GPG_SIG) && (call_type & GPG_ENC)) {
 		dsbPrintf(cmd, " -r '%s' -s -e", encto->str);
 	} else if (call_type & GPG_ENC) {
@@ -119,7 +120,6 @@ callGpg(dstrbuf *input, GpgCallType call_type)
 	dsbPrintf(cmd, " '%s'", tmpfile);
 	retval = execgpg(cmd->str, gpg_pass);
 	dsbDestroy(encto);
-	fclose(fdtmp);
 	unlink(tmpfile);
 
 	if (retval == -1) {
