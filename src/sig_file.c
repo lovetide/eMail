@@ -44,6 +44,7 @@
 
 #include "email.h"
 #include "utils.h"
+#include "file_io.h"
 #include "sig_file.h"
 #include "error.h"
 
@@ -198,18 +199,24 @@ appendFortune(dstrbuf *app)
 int
 appendSig(dstrbuf *app, const char *sigfile)
 {
-	FILE *sig;
+	dstrbuf *fc = NULL;	// file content
 	int next_char;
+	int iRead = 0;
 
-	if (!(sig = fopen(sigfile, "r"))) {
+	if (!(fc = getFileContents(sigfile))) {
 		warning("Could not open signature file");
 		return ERROR;
 	}
 
 	/* Loop through signature file pulling out the contents and fixing wildcards */
-	while ((next_char = fgetc(sig)) != EOF) {
+	while (true) {
+		next_char = fc->str[iRead++];
+		if (next_char == 0)
+			break;
+
 		if (next_char == '%') {
-			switch ((next_char = fgetc(sig))) {
+			next_char = fc->str[iRead++];
+			switch (next_char) {
 			case 't':
 				appendTime(app);
 				break;
@@ -228,6 +235,8 @@ appendSig(dstrbuf *app, const char *sigfile)
 			case 'f':
 				appendFortune(app);
 				break;
+			case 0:	// end of string/file
+				break;
 			default:
 				dsbCatChar(app, next_char);
 				break;
@@ -237,16 +246,12 @@ appendSig(dstrbuf *app, const char *sigfile)
 		}
 	}
 
-	if (ferror(sig)) {
-		fclose(sig);
-		return ERROR;
-	}
-
 	/* We have to append <BR> to our sig divider for HTML */
 	if (Mopts.html) {
-		dsbPrintf(app, "<BR>\n");
+		dsbPrintf(app, "<br/>\r\n");
 	}
-	fclose(sig);
+
+	dsbDestroy (fc);
 	return SUCCESS;
 }
 
