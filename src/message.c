@@ -50,504 +50,60 @@
 #include "execgpg.h"
 #include "utils.h"
 #include "file_io.h"
-#include "addy_book.h"
+#include "addr_book.h"
 #include "remotesmtp.h"
 #include "addr_parse.h"
 #include "message.h"
 #include "mimeutils.h"
 #include "error.h"
 
-/**
- * All functions below are pretty self explanitory.  
- * They basically just preform some simple header printing 
- * for our email 'message'.  I'm not doing to comment every 
- * function from here because you should be able to read the 
- * damn functions and get a great idea
-**/
-static void
-printMimeHeaders(const char *b, dstrbuf *msg, CharSetType charset)
-{
-	dsbPrintf(msg, "Mime-Version: 1.0\r\n");
-	if (Mopts.gpg_opts & GPG_ENC) {
-		dsbPrintf(msg, "Content-Type: multipart/encrypted; "
-			"protocol=\"application/pgp-encrypted\"; " 
-			"boundary=\"%s\"\r\n", b);
-	} else if (Mopts.gpg_opts & GPG_SIG) {
-		dsbPrintf(msg, "Content-Type: multipart/signed; "
-			"micalg=pgp-sha1; protocol=\"application/pgp-signature\"; "
-			"boundary=\"%s\"\r\n", b);
-	} else if (Mopts.attach) {
-		dsbPrintf(msg, "Content-Type: multipart/mixed; boundary=\"%s\"\r\n", b);
-	} else {
-        if (Mopts.html) {
-			dsbPrintf(msg, "Content-Type: text/html");
-        } else {
-			dsbPrintf(msg, "Content-Type: text/plain");
-        }
-		if (charset == IS_UTF8 || charset == IS_PARTIAL_UTF8) {
-			dsbPrintf(msg, "; charset=utf-8\r\n");
-			if (charset == IS_PARTIAL_UTF8) {
-				dsbPrintf(msg, "Content-Transfer-Encoding: quoted-printable\r\n");
-			} else {
-				dsbPrintf(msg, "Content-Transfer-Encoding: base64\r\n");
-			}
-			dsbPrintf(msg, "Content-Disposition: inline\r\n");
-		} else {
-			dsbPrintf(msg, "\r\n");
-        }
-	}
-}
+const char *CONTENT_PRIMARY_TYPE_TEXT        = "text";
+const char *CONTENT_PRIMARY_TYPE_MULTIPART   = "multipart";
+const char *CONTENT_PRIMARY_TYPE_APPLICATION = "application";
+const char *CONTENT_PRIMARY_TYPE_MESSAGE     = "message";
+
+// text/
+const char *CONTENT_SUBTYPE_PLAIN            = "plain";
+const char *CONTENT_SUBTYPE_HTML             = "html";
+// multipart/
+const char *CONTENT_SUBTYPE_MIXED            = "mixed";
+const char *CONTENT_SUBTYPE_RELATED          = "related";
+const char *CONTENT_SUBTYPE_ALTERNATIVE      = "alternative";
+const char *CONTENT_SUBTYPE_SIGNED           = "signed";
+const char *CONTENT_SUBTYPE_ENCRYPTED        = "encrypted";
+// application/
+const char *CONTENT_SUBTYPE_PGP_ENCRYPTED    = "pgp-encrypted";
+const char *CONTENT_SUBTYPE_PGP_SIGNATURE    = "pgp-signature";
+const char *CONTENT_SUBTYPE_PGP_KEYS         = "pgp-keys";
+const char *CONTENT_SUBTYPE_PKCS7_ENCRYPTED  = "pkcs7-encrypted";
+const char *CONTENT_SUBTYPE_PKCS7_SIGNATURE  = "pkcs7-signature";
+const char *CONTENT_SUBTYPE_OCTET_STREAM     = "octet-stream";
+// message/
+const char *CONTENT_SUBTYPE_RFC822           = "rfc822";
+const char *CONTENT_SUBTYPE_PARTIAL          = "partial";
+
+const char *CONTENT_DISPOSITION_INLINE       = "inline";
+const char *CONTENT_DISPOSITION_ATTACHMENT   = "attachment";
+const char *CONTENT_DISPOSITION_HIDDEN       = "hidden";
+
+const char *CONTENT_TRANSFER_ENCODING_QP     = "quoted-printable";
+const char *CONTENT_TRANSFER_ENCODING_BASE64 = "base64";
+const char *CONTENT_TRANSFER_ENCODING_8BIT   = "8bit";
+const char *CONTENT_TRANSFER_ENCODING_7BIT   = "7bit";
+const char *CONTENT_TRANSFER_ENCODING_BINARY = "binary";
 
 /**
- * just prints the to headers, and cc headers if available
+ * this is the function that takes over from main().
+ * It will call all functions nessicary to finish off the
+ * rest of the program and then return properly.
 **/
-static void
-printToHeaders(dlist to, dlist cc, dstrbuf *msg)
-{
-	struct addr *a = (struct addr *)dlGetNext(to);
-	dsbPrintf(msg, "To: ");
-	while (a) {
-		dstrbuf *tmp = formatEmailAddr(a->name, a->email);
-		dsbPrintf(msg, "%s", tmp->str);
-		dsbDestroy(tmp);
-		a = (struct addr *)dlGetNext(to);
-		if (a != NULL) {
-			dsbPrintf(msg, ", ");
-		} else {
-			dsbPrintf(msg, "\r\n");
-		}
-	}
-
-	if (cc != NULL) {
-		dsbPrintf(msg, "Cc: ");
-		a = (struct addr *)dlGetNext(cc);
-		while (a) {
-			dstrbuf *tmp = formatEmailAddr(a->name, a->email);
-			dsbPrintf(msg, "%s", tmp->str);
-			dsbDestroy(tmp);
-			a = (struct addr *)dlGetNext(cc);
-			if (a != NULL) {
-				dsbPrintf(msg, ", ");
-			} else {
-				dsbPrintf(msg, "\r\n");
-			}
-		}
-	}
-}
-
-/**
- * Bcc gets a special function because it's not always printed for standard
- * Mail delivery.  Only if sendmail is going to be invoked, shall it be printed
- * reason being is because sendmail needs the Bcc header to know everyone who
- * is going to recieve the message, when it is done with reading the Bcc headers
- * it will remove this from the headers field.
-**/
-static void
-printBccHeaders(dlist bcc, dstrbuf *msg)
-{
-	struct addr *a=NULL;
-
-	if (bcc != NULL) {
-		dsbPrintf(msg, "Bcc: ");
-		a = (struct addr *)dlGetNext(bcc);
-		while (a != NULL) {
-			dstrbuf *tmp = formatEmailAddr(a->name, a->email);
-			dsbPrintf(msg, "%s", tmp->str);
-			dsbDestroy(tmp);
-			a = (struct addr *)dlGetNext(bcc);
-			if (a) {
-				dsbPrintf(msg, ", ");
-			} else {
-				dsbPrintf(msg, "\r\n");
-			}
-		}
-        }
-}
-
-/** Print From Headers **/
-static void
-printFromHeaders(char *name, char *address, dstrbuf *msg)
-{
-	dstrbuf *addr = formatEmailAddr(name, address);
-	dsbPrintf(msg, "From: %s\r\n", addr->str);
-	dsbDestroy(addr);
-}
-
-/** Print Date Headers **/
-static void
-printDateHeaders(dstrbuf *msg)
-{
-	time_t set_time;
-	struct tm *lt;
-	char buf[MAXBUF] = { 0 };
-
-	set_time = time(&set_time);
-
-#ifdef USE_GMT
-	lt = gmtime(&set_time);
-#else
-	lt = localtime(&set_time);
-#endif
-
-#ifdef USE_GNU_STRFTIME
-	strftime(buf, MAXBUF, "%a, %d %b %Y %H:%M:%S %z", lt);
-#else
-	strftime(buf, MAXBUF, "%a, %d %b %Y %H:%M:%S %Z", lt);
-#endif
-
-	dsbPrintf(msg, "Date: %s\r\n", buf);
-}
-
-static void
-printExtraHeaders(dlist headers, dstrbuf *msg)
-{
-	char *hdr=NULL;
-	while ((hdr = (char *)dlGetNext(headers)) != NULL) {
-		dsbPrintf(msg, "%s\r\n", hdr);
-	}
-}
-
-/**
- * This function takes the current content that was copied
- * in to us and creates a final message with the email header
- * and the appended content.  It will also attach any files
- * that were specified at the command line.
-**/
-static void
-printHeaders(const char *border, dstrbuf *msg, CharSetType msg_cs)
-{
-	char *subject=Mopts.subject;
-	char *user_name = getConfValue("MY_NAME");
-	char *email_addr = getConfValue("MY_EMAIL");
-	char *sm_bin = getConfValue("SENDMAIL_BIN");
-	char *smtp_serv = getConfValue("SMTP_SERVER");
-	char *reply_to = getConfValue("REPLY_TO");
-	dstrbuf *dsb=NULL;
-
-	if (subject) {
-		if (Mopts.encoding) {
-			CharSetType cs = getCharSet((u_char *)subject);
-			if (cs == IS_UTF8) {
-				dsb = encodeUtf8String((u_char *)subject, false);
-				subject = dsb->str;
-			} else if (cs == IS_PARTIAL_UTF8) {
-				dsb = encodeUtf8String((u_char *)subject, true);
-				subject = dsb->str;
-			}
-		}
-		dsbPrintf(msg, "Subject: %s\r\n", subject);
-		if (dsb) {
-			dsbDestroy(dsb);
-		}
-	}
-	printFromHeaders(user_name, email_addr, msg);
-	printToHeaders(Mopts.to, Mopts.cc, msg);
-
-	/**
-	 * We want to check here to see if we are sending mail by invoking sendmail
-	 * If so, We want to add the BCC line to the headers.  Sendmail checks this
-	 * Line and makes sure it sends the mail to the BCC people, and then remove
-	 * the BCC addresses...  Keep in mind that sending to an smtp servers takes
-	 * presidence over sending to sendmail incase both are mentioned.
-	 */
-	if (sm_bin && !smtp_serv) {
-		printBccHeaders(Mopts.bcc, msg);
-	}
-
-	/* The rest of the standard headers */
-	printDateHeaders(msg);
-	if (reply_to) {
-		dsbPrintf(msg, "Reply-To: <%s>\r\n", reply_to);
-	}
-	printMimeHeaders(border, msg, msg_cs);
-	dsbPrintf(msg, "X-Mailer: Cleancode.email v%s \r\n", EMAIL_VERSION);
-	if (Mopts.priority) {
-		dsbPrintf(msg, "X-Priority: 1\r\n");
-	}
-	printExtraHeaders(Mopts.headers, msg);
-	dsbPrintf(msg, "\r\n");
-}
-
-
-/**
- * set up the appropriate MIME and Base64 headers for 
- * the attachment of file specified in Mopts.attach
-**/
-static int
-attachFiles(const char *boundary, dstrbuf *out)
-{
-	dstrbuf *file_name = NULL;
-	dstrbuf *file_type = NULL;
-	char *next_file = NULL;
-
-	/*
-	* What we will do here is parse Mopts.attach for comma delimited file
-	* names.  If there was only one file specified with no comma, then strtok()
-	* will just return that file and the next call to strtok() will be NULL
-	* which will allow use to break out of our loop of attaching base64 stuff.
-	*/
-	while ((next_file = (char *)dlGetNext(Mopts.attach)) != NULL) {
-		FILE *current = fopen(next_file, "r");
-		if (!current) {
-			fatal("Could not open attachment: %s", next_file);
-			return (ERROR);
-		}
-
-		/* If the user specified an absolute path, just get the file name */
-		file_type = mimeFiletype(next_file);
-		file_name = mimeFilename(next_file);
-
-		/* Set our MIME headers */
-		dsbPrintf(out, "\r\n--%s\r\n", boundary);
-		dsbPrintf(out, "Content-Transfer-Encoding: base64\r\n");
-		dsbPrintf(out, "Content-Type: %s; name=\"%s\"\r\n", 
-			file_type->str, file_name->str);
-		dsbPrintf(out, "Content-Disposition: attachment; filename=\"%s\"\r\n", 
-			file_name->str);
-		dsbPrintf(out, "\r\n");
-
-		/* Encode to 'out' */
-		mimeB64EncodeFile(current, out);
-		dsbDestroy(file_type);
-		dsbDestroy(file_name);
-	}
-	return SUCCESS;
-}
-
-/*
- * According http://tools.ietf.org/html/rfc5321#section-4.5.2, if 1st character of a line is '.', it should be duplicated.
- * Data transparency is only needed in plain content (text or HTML) and quoted-printable content, GPG content, BASE64 content needn't it, because normally there're no '.' in it.
- *
- * Data transparency SHOULD be processed in smtpSendData() in smtpcommands.c (when "sending" email), but it's better processed here when "writing" mail, because not all data need to be transparency, as mentioned above.
- *
- * See also mimeQpEncodeString in mimeutils.c
- *
- * dst: Destination string buffer
- * src: The whole source message. Use this function on separated messages is not recommended.
- */
-static int provisionForDataTransparency (dstrbuf *dst, const char *src)
-{
-	int nLen = strlen (src);
-	const char *pLeft = src, *pRight = src;
-	bool bNewLine = true;
-	// Sample string: ".aaa\n.bbb.c\ncc.ddd"
-	for (pRight=src; pRight-pLeft<=nLen; pRight++)
-	{
-		if (*pRight=='\r' || *pRight=='\n')
-		{
-			bNewLine = true;
-			continue;
-		}
-
-		if (*pRight=='.' && bNewLine)
-		{
-			dsbnCat(dst, pLeft, pRight-pLeft+1);	// "." and "aaa\n."
-			dsbCatChar (dst, '.');
-			pRight ++;
-			pLeft = pRight;
-		}
-		bNewLine = false;
-	}
-	dsbnCat(dst, pLeft, pRight-pLeft+1);	// the remaining: "bbb.c\ncc.ddd"
-	return SUCCESS;
-}
-
-/** 
- * Makes a standard plain text message while taking into
- * account the MIME message types and boundary's needed
- * if and when a file is attached.
-**/
-static int
-makeMessage(dstrbuf *in, dstrbuf *out, const char *border, CharSetType charset)
-{
-	dstrbuf *enc=NULL;
-	if (Mopts.attach) {
-		dsbPrintf(out, "--%s\r\n", border);
-		if (charset == IS_UTF8 || charset == IS_PARTIAL_UTF8) {
-			dsbPrintf(out, "Content-Type: text/plain; charset=utf-8\r\n");
-			if (IS_PARTIAL_UTF8) {
-				dsbPrintf(out, "Content-Transfer-Encoding: quoted-printable\r\n");
-				enc = mimeQpEncodeString((u_char *)in->str, true);
-			} else {
-				dsbPrintf(out, "Content-Transfer-Encoding: base64\r\n");
-				enc = mimeB64EncodeString((u_char *)in->str, in->len, true);
-			}
-			dsbPrintf(out, "Content-Disposition: inline\r\n\r\n");
-		} else if (Mopts.html) {
-			dsbPrintf(out, "Content-Type: text/html\r\n\r\n");
-			enc = DSB_NEW;
-			provisionForDataTransparency (enc, in->str);
-		} else {
-			dsbPrintf(out, "Content-Type: text/plain\r\n\r\n");
-			enc = DSB_NEW;
-			provisionForDataTransparency (enc, in->str);
-		}
-	} else {
-		if (charset == IS_UTF8) {
-			enc = mimeB64EncodeString((u_char *)in->str, in->len, true);
-		} else if (charset == IS_PARTIAL_UTF8) {
-			enc = mimeQpEncodeString((u_char *)in->str, true);
-		} else {
-			enc = DSB_NEW;
-			provisionForDataTransparency (enc, in->str);
-		}
-	}
-	dsbPrintf(out, "%s\r\n", enc->str);
-	if (Mopts.attach) {
-		if (attachFiles(border, out) == ERROR) {
-			return ERROR;
-		}
-		dsbPrintf(out, "\r\n\r\n--%s--\r\n", border);
-	}
-	dsbDestroy(enc);
-	return 0;
-}
-
-/**
- * Makes a message type specifically for gpg encryption and 
- * signing.  Specific MIME message descriptions are needed
- * when signing/encrypting a file before it is actuall signed
- * or encrypted.  This function takes care of that.
-**/
-static int
-makeGpgMessage(dstrbuf *in, dstrbuf *out, const char *border)
-{
-	dstrbuf *qp=NULL;
-
-	assert(in != NULL);
-	assert(out != NULL);
-	assert(border != NULL);
-
-	if (Mopts.attach) {
-		dsbPrintf(out, "Content-Type: multipart/mixed; "
-			"boundary=\"%s\"\r\n\r\n", border);
-		dsbPrintf(out, "\r\n--%s\r\n", border);
-	}
-
-	if (Mopts.html) {
-		dsbPrintf(out, "Content-Type: text/html\r\n");
-	} else {
-		dsbPrintf(out, "Content-Type: text/plain\r\n");
-	}
-
-	dsbPrintf(out, "Content-Transfer-Encoding: quoted-printable\r\n\r\n");
-	qp = mimeQpEncodeString((u_char *)in->str, true);
-	dsbnCat(out, qp->str, qp->len);
-	dsbDestroy(qp);
-	if (Mopts.attach) {
-		attachFiles(border, out);
-		dsbPrintf(out, "\r\n--%s--\r\n", border);
-	}
-	return 0;
-}
-
-/**
- * Creates a signed message with gpg and takes into 
- * account the correct MIME message types to add to 
- * the message.
-**/
-static dstrbuf *
-createGpgEmail(dstrbuf *msg, GpgCallType gpg_type)
-{
-	dstrbuf *tmpbuf=DSB_NEW;
-	dstrbuf *gpgdata=NULL, *buf=DSB_NEW;
-	dstrbuf *border1=NULL, *border2=NULL;
-
-	assert(msg != NULL);
-
-	/* Create two borders if we're attaching files */
-	border1 = mimeMakeBoundary();
-	if (Mopts.attach) {
-		border2 = mimeMakeBoundary();
-	} else {
-		border2 = DSB_NEW;
-	}
-
-	if (makeGpgMessage(msg, tmpbuf, border2->str) < 0) {
-		dsbDestroy(buf);
-		buf=NULL;
-		goto end;
-	}
-
-	gpgdata = callGpg(tmpbuf, gpg_type);
-	if (!gpgdata) {
-		dsbDestroy(buf);
-		buf=NULL;
-		goto end;
-	}
-	printHeaders(border1->str, buf, IS_ASCII);
-
-	dsbPrintf(buf, "\r\n--%s\r\n", border1->str);
-	if (gpg_type & GPG_ENC) {
-		dsbPrintf(buf, "Content-Type: application/pgp-encrypted\r\n\r\n");
-		dsbPrintf(buf, "Version: 1\r\n");
-		dsbPrintf(buf, "\r\n--%s\r\n", border1->str);
-		dsbPrintf(buf, "Content-type: application/octet-stream; "
-			       "name=encrypted.asc\r\n\r\n");
-	} else if (gpg_type & GPG_SIG) {
-		dsbPrintf(buf, "%s\r\n", tmpbuf->str);
-		dsbPrintf(buf, "\r\n--%s\r\n", border1->str);
-		dsbPrintf(buf, "Content-Type: application/pgp-signature\r\n");
-		dsbPrintf(buf, "Content-Description: This is a digitally signed message\r\n\r\n");
-	} 
-	dsbPrintf(buf, "%s", gpgdata->str);
-	dsbPrintf(buf, "\r\n--%s--\r\n", border1->str);
-
-end:
-	dsbDestroy(tmpbuf);
-	dsbDestroy(gpgdata);
-	dsbDestroy(border1);
-	dsbDestroy(border2);
-	return buf;
-}
-
-/**
- * Creates a plain text (or html) email and 
- * specifies the necessary MIME types if needed
- * due to attaching base64 files.
- * when this function is done, it will rewind
- * the file position and return an open file
-**/
-static dstrbuf *
-createPlainEmail(dstrbuf *msg) 
-{
-	dstrbuf *border=NULL;
-	dstrbuf *buf=DSB_NEW;
-	CharSetType cs;
-
-	if (Mopts.attach) {
-		border = mimeMakeBoundary();
-	} else {
-		border = DSB_NEW;
-	}
-
-	if (Mopts.encoding) {
-		cs = getCharSet((u_char *)msg->str);
-	} else {
-		cs = IS_ASCII;
-	}
-	printHeaders(border->str, buf, cs);
-	if (makeMessage(msg, buf, border->str, cs) < 0) {
-		dsbDestroy(buf);
-		buf=NULL;
-	}
-	dsbDestroy(border);
-	return buf;
-}
-
-/**
- * this is the function that takes over from main().  
- * It will call all functions nessicary to finish off the 
- * rest of the program and then return properly. 
-**/
-void
-createMail(void)
+void createMail(void)
 {
 	dstrbuf *msg=NULL;
 	char subject[MAXBUF]={0};
 
 	/**
-	 * first let's check if someone has tried to send stuff in from STDIN 
+	 * first let's check if someone has tried to send stuff in from STDIN
 	 * if they have, let's call a read to stdin
 	 */
 	if (isatty(STDIN_FILENO) == 0) {
@@ -578,12 +134,16 @@ createMail(void)
 		}
 	}
 
-	/* Create a message according to the type */
-	if (Mopts.gpg_opts) {
-		global_msg = createGpgEmail(msg, Mopts.gpg_opts);
-	} else {
-		global_msg = createPlainEmail(msg);
-	}
+	MimeMessage *mm = newMimeMessage (msg);
+
+	dstrbuf *buf = DSB_NEW;
+	printMimeMultiPart (mm, buf, true, false);
+
+	global_msg = dsbNew (buf->len);
+	provisionForDataTransparency (global_msg, buf->str);
+#ifdef _DEBUG
+	printf (global_msg->str);
+#endif
 
 	if (!global_msg) {
 		dsbDestroy(msg);
@@ -594,3 +154,678 @@ createMail(void)
 	sendmail(global_msg);
 }
 
+/*
+construct MIME message structure, prepare data (encoding, reading file, etc)
+
++---- multipart/encrypted or signed ----+
+| +--------- multipart/mixed ---------+ |
+| | +------ multipart/related ------+ | |
+| | | +-- multipart/alternative --+ | | |
+| | | |  +------------+           | | | |
+| | | |  | plain text |           | | | |
+| | | |  +------------+           | | | |
+| | | |  +------------+           | | | |
+| | | |  |    HTML    |           | | | |
+| | | |  +------------+           | | | |
+| | | +---------------------------+ | | |
+| | | +----------+ +----------+     | | |
+| | | | embedded | | embedded | ... | | |
+| | | +----------+ +----------+     | | |
+| | +-------------------------------+ | |
+| | +------+ +------+ +------+        | |
+| | |attach| |attach| |attach| ...    | |
+| | +------+ +------+ +------+        | |
+| +-----------------------------------+ |
+| +-application/pgp-encrypted or sign-+ |
+| | encrypted data or signature       | |
+| +-----------------------------------+ |
++---------------------------------------+
+*/
+MimeMessage *newMimeMessage (dstrbuf *msg)
+{
+	MimeMultiPart
+		*mmp_alternative = NULL,
+		*mmp_related = NULL,
+		*mmp_mixed = NULL;
+	MimeBodyPart *textPart = NULL;
+	MimeMessage *mimeMessage = NULL;	// will be one of the above
+
+	dstrbuf *buf = dsbNew (msg->len);
+	dsbCopy (buf, msg->str);
+
+	// text/plain (default)
+	textPart = newTextPart (CONTENT_SUBTYPE_PLAIN);
+	textPart->content = buf;
+	textPart->contentHeaders.contentType.paramCharset = Mopts.body_encoding;
+	mimeMessage = textPart;
+
+	// text/html
+	if (Mopts.html)
+	{
+		textPart->contentHeaders.contentType.subType = CONTENT_SUBTYPE_HTML;
+	}
+	// multipart/alternative (will wrap textPart and alternative htmlPart)
+	else if (Mopts.alt_html_filename)
+	{
+		mmp_alternative = newMultipartPart (CONTENT_SUBTYPE_ALTERNATIVE);
+
+		MimeBodyPart *htmlPart = newTextPart (CONTENT_SUBTYPE_HTML);
+		dstrbuf *sbHTML = getFileContents (Mopts.alt_html_filename);
+		htmlPart->content = sbHTML;
+
+		addBodyPart (mmp_alternative, textPart);
+		addBodyPart (mmp_alternative, htmlPart);
+
+		mimeMessage = mmp_alternative;
+	}
+
+	// multipart/related (will wrap above mimeMessage and related attachments)
+	if (Mopts.related_attach)	// && (Mopts.html || Mopts.alt_html_filename)
+	{
+		mmp_related = newMultipartPart (CONTENT_SUBTYPE_RELATED);
+
+		addBodyPart (mmp_related, mimeMessage);
+		attachFiles (mmp_related, Mopts.related_attach);
+
+		mimeMessage = mmp_related;
+	}
+
+	// multipart/mixed (will wrap above mimeMessage and attachments)
+	if (Mopts.attach)
+	{
+		mmp_mixed = newMultipartPart (CONTENT_SUBTYPE_MIXED);
+
+		addBodyPart (mmp_mixed, mimeMessage);
+		attachFiles (mmp_mixed, Mopts.attach);
+
+		mimeMessage = mmp_mixed;
+	}
+
+	mimeMessage->contentHeaders.contentTransferEncoding = Mopts.transfer_encoding;
+
+	// PGP: multipart/pgp-encrypted, multipart/pgp-signed
+	// S/MIME: multipart/pkcs7-encrypted, multipart/pkcs7-signed
+	// (will encrypt or sign the above mimeMessage, then wrap it and controlPart)
+	// we can encrypt the entire MIME message or separated into different parts
+	if (Mopts.gpg_opts)
+	{
+		MimeBodyPart *controlPart = newApplicationPart (CONTENT_SUBTYPE_PGP_ENCRYPTED);
+		MimeBodyPart *dataPart = NULL;
+		dstrbuf *sbControl = DSB_NEW,
+				*sbSecure = NULL,
+				*sbMessage = DSB_NEW;
+
+		printMimeMultiPart (mimeMessage, sbMessage, false, true);
+#ifdef _DEBUG
+		printf ("Contents to be encrypted/signed:\n[");
+		printf (sbMessage->str);
+		printf ("]\n");
+#endif
+		sbSecure = callGpg (sbMessage, Mopts.gpg_opts);
+		if (!sbSecure)
+		{
+		}
+
+
+		if (Mopts.gpg_opts & GPG_ENC)
+		{
+			mmp_mixed = newMultipartPart (CONTENT_SUBTYPE_ENCRYPTED);
+			mmp_mixed->contentHeaders.contentType.paramProtocol = xstrdup("application/pgp-encrypted");
+
+			dataPart = newApplicationPart (CONTENT_SUBTYPE_OCTET_STREAM);
+
+			controlPart->content = sbControl;
+			dataPart->content = sbSecure;
+			dsbDestroy (sbMessage);
+
+			//addHeader (controlPart, "Version", "1", false, false);
+			dsbCat (sbControl, "Version: 1\r\n");
+
+			dataPart->contentHeaders.contentType.paramName      = xstrdup("encrypted.asc");
+
+			addBodyPart (mmp_mixed, controlPart);
+			addBodyPart (mmp_mixed, dataPart);
+		}
+		else //if (Mopts.gpg_opts & GPG_SIG)
+		{
+			mmp_mixed = newMultipartPart (CONTENT_SUBTYPE_SIGNED);
+			mmp_mixed->contentHeaders.contentType.paramProtocol = xstrdup("application/pgp-signature");
+			mmp_mixed->contentHeaders.contentType.paramMicalg   = xstrdup("pgp-sha1");
+
+			dataPart = mimeMessage;
+			controlPart->content = sbSecure;
+			dsbDestroy (sbControl);
+
+			controlPart->contentHeaders.contentType.subType     = CONTENT_SUBTYPE_PGP_SIGNATURE;
+			controlPart->contentHeaders.contentDescription      = xstrdup("This is a digitally signed message");
+
+			addBodyPart (mmp_mixed, dataPart);
+			addBodyPart (mmp_mixed, controlPart);
+		}
+
+		mimeMessage = mmp_mixed;
+	}
+	return mimeMessage;
+}
+MimeMultiPart *newPart (const char *primaryType, const char *subType)
+{
+	MimeMultiPart *part = xmalloc(sizeof(MimeMultiPart));
+	memset (part, 0, sizeof(MimeMultiPart));
+	part->contentHeaders.contentType.primaryType = primaryType;
+	part->contentHeaders.contentType.subType = subType;
+	return part;
+}
+MimeMultiPart *newTextPart (const char *subType)
+{
+	return newPart (CONTENT_PRIMARY_TYPE_TEXT, subType);
+}
+MimeMultiPart *newMultipartPart (const char *subType)
+{
+	MimeMultiPart *part = newPart (CONTENT_PRIMARY_TYPE_MULTIPART, subType);
+	dstrbuf *sbBoundary = mimeMakeBoundary();
+	part->isMultiPartContent = true;
+	part->contentHeaders.contentType.paramBoundary = xstrdup(sbBoundary->str);
+	dsbDestroy (sbBoundary);
+	return part;
+}
+MimeMultiPart *newApplicationPart (const char *subType)
+{
+	return newPart (CONTENT_PRIMARY_TYPE_APPLICATION, subType);
+}
+extern void defaultDestr(void *ptr);
+void addBodyPart (MimeMultiPart *mmp, MimeBodyPart *mbp)
+{
+	dlist bodyParts = mmp->content;
+	if (! bodyParts) bodyParts = dlInit(defaultDestr);	// TODO: should define a destroyer
+	dlAppend (bodyParts, mbp);
+	mmp->content = bodyParts;
+	mbp->parent = mmp;
+}
+
+int attachFiles (MimeMultiPart *mmp, dlist filenames)
+{
+	char *filename;
+	dstrbuf *file_name = NULL;
+	dstrbuf *file_type = NULL;
+	struct stat file_stat;
+	int rc;
+	while ((filename = dlGetNext(filenames)) != NULL)
+	{
+		FILE *fp = fopen(filename, "r");
+		if (!fp) {
+			fatal("Could not open related attachment: %s", filename);
+			return (ERROR);
+		}
+
+		/* If the user specified an absolute path, just get the file name */
+		file_type = mimeFiletype(filename);
+		file_name = mimeFilename(filename);
+
+		memset (&file_stat, 0, sizeof(struct stat));
+		rc = stat (filename, &file_stat);
+		MimeBodyPart *attachment = newPart (NULL, NULL);
+		attachment->contentHeaders.contentType.contentType = xstrdup (file_type->str);
+		//attachment->contentHeaders.contentType.primaryType = CONTENT_TYPE_TEXT;
+		//attachment->contentHeaders.contentType.subType = CONTENT_SUBTYPE_HTML;
+		attachment->contentHeaders.contentType.paramName = xstrdup (file_name->str);	//filename;
+		//attachment->contentHeaders.contentID;	// TODO: refer by cid: URL in HTML body part
+		//attachment->contentHeaders.contentLocation;
+		//attachment->contentHeaders.contentBase;
+		attachment->contentHeaders.contentTransferEncoding = CONTENT_TRANSFER_ENCODING_BASE64;
+		attachment->contentHeaders.isEncoded = true;
+		attachment->contentHeaders.contentDisposition.dispositionType = CONTENT_DISPOSITION_ATTACHMENT;
+		attachment->contentHeaders.contentDisposition.paramFilename = xstrdup (file_name->str);
+		attachment->contentHeaders.contentLocation = xstrdup (file_name->str);
+		if (rc==0)
+		{
+			//attachment->contentHeaders.contentDisposition.paramCreationTime = ;	// file_stat.st_ctim
+			//attachment->contentHeaders.contentDisposition.paramModificationTime = ;	// file_stat.st_mtim
+			//attachment->contentHeaders.contentDisposition.paramAccessTime = ;	// file_stat.st_atim
+			dstrbuf *buf = DSB_NEW;
+			dsbPrintf (buf, "%d", file_stat.st_size);
+			attachment->contentHeaders.contentDisposition.paramSize = xstrdup(buf->str);
+			dsbDestroy (buf);
+		}
+
+		dsbDestroy(file_type);
+		dsbDestroy(file_name);
+
+		dstrbuf *buf;
+		if (rc==0)
+			buf = dsbNew (file_stat.st_size * 4 / 3);	// BASE64 size : original = 4:3
+		else
+			buf = DSB_NEW;
+
+		mimeB64EncodeFile (fp, buf);
+		attachment->content = buf;
+		addBodyPart (mmp, attachment);
+		fclose (fp);
+	}
+	return SUCCESS;
+}
+
+void addHeader (MimeMultiPart *mmp, const char *name, const char *value, bool bNeedToBeQuoted, bool bNeedToBeEncoded)
+{
+	assert (mmp);
+	dlist headers = mmp->otherHeaders;
+	if (! headers)
+	{
+		headers = dlInit (headerDestroyer);
+		mmp->otherHeaders = headers;
+	}
+
+	Header *header = xmalloc (sizeof(Header));
+	memset (header, 0, sizeof(Header));
+	header->name = xstrdup (name);
+	header->value = xstrdup (value);
+	//header->parameters = NULL;	// otherHeaders don't have parameters
+	header->needToBeQuoted = bNeedToBeQuoted;
+	header->needToBeEncoded = bNeedToBeEncoded;
+	dlAppend (headers, header);
+}
+
+/*
+params:
+	mmp: MimeMultiPart
+	buf: Output string buffer
+	bPrintMailHeader: Print mail header or not (only be 'true' when printing whole mail message)
+    bPrintForSecurity: Print for security or not.
+        It's only be 'true' when making secure mail (encrypt or signature).
+        If it's true, we'll NOT print CRLF after the last boundary string ("--boundary--")
+          to assure the data integrity.
+*/
+void printMimeMultiPart (MimeMultiPart *mmp, dstrbuf *buf, bool bPrintMailHeader, bool bPrintForSecurity)
+{
+	assert (mmp);
+	// Headers begin
+	//if (! mmp->parent)
+	if (bPrintMailHeader)
+	{
+		printMailHeaders (buf);
+	}
+	// Content Headers
+	printContentHeaders (mmp->contentHeaders, buf);
+	dsbCat (buf, "\r\n");
+	// Headers end
+
+	if (mmp->isMultiPartContent)
+	{
+		MimeMultiPart *bodyPart;
+		while ((bodyPart = (MimeMultiPart *)dlGetNext(mmp->content)) != NULL) {
+			// print boundary
+			dsbPrintf (buf, "--%s\r\n", mmp->contentHeaders.contentType.paramBoundary);
+
+			// print body part
+			printMimeMultiPart (bodyPart, buf, false, false);
+		}
+		dsbPrintf (buf, "--%s--", mmp->contentHeaders.contentType.paramBoundary);
+		if (! bPrintForSecurity)
+			dsbCat (buf, "\r\n");
+	}
+	else if (mmp->content)
+	{
+		dstrbuf *msg = (dstrbuf *)(mmp->content);
+		dstrbuf *enc = NULL;
+		//dsbCat (buf, msg->str);
+		if (mmp->contentHeaders.contentTransferEncoding && !mmp->contentHeaders.isEncoded)
+		{
+			if (strcasecmp(mmp->contentHeaders.contentTransferEncoding, CONTENT_TRANSFER_ENCODING_QP)==0)
+			{
+				enc = mimeQpEncodeString((u_char *)msg->str, true);
+			}
+			else if (strcasecmp(mmp->contentHeaders.contentTransferEncoding, CONTENT_TRANSFER_ENCODING_BASE64)==0)
+			{
+				enc = mimeB64EncodeString((u_char *)msg->str, msg->len, true);
+			}
+		}
+
+		if (enc)
+			dsbCat (buf, enc->str);
+		else
+			dsbCat (buf, msg->str);
+
+		dsbDestroy (enc);
+
+		char cLastChar = msg->str[msg->len-1];
+		if (cLastChar!='\n' && cLastChar!='\r')
+			dsbCat (buf, "\r\n");
+	}
+}
+
+void printMailHeaders (dstrbuf *buf)
+{
+	char *subject=Mopts.subject;
+	char *user_name = getConfValue("MY_NAME");
+	char *email_addr = getConfValue("MY_EMAIL");
+	char *sm_bin = getConfValue("SENDMAIL_BIN");
+	char *smtp_serv = getConfValue("SMTP_SERVER");
+	char *reply_to = getConfValue("REPLY_TO");
+
+	printSubjectHeader (subject, Mopts.encoding, buf);
+	printFromHeader  (user_name, email_addr, buf);
+	printToHeaders(Mopts.to, Mopts.cc, buf);
+
+	/**
+	 * We want to check here to see if we are sending mail by invoking sendmail
+	 * If so, We want to add the BCC line to the headers.  Sendmail checks this
+	 * Line and makes sure it sends the mail to the BCC people, and then remove
+	 * the BCC addresses...  Keep in mind that sending to an smtp servers takes
+	 * presidence over sending to sendmail incase both are mentioned.
+	 */
+	if (sm_bin && !smtp_serv) {
+		printBccHeader(Mopts.bcc, buf);
+	}
+
+	/* The rest of the standard headers */
+	printDateHeader(buf);
+	if (reply_to) {
+		dsbPrintf(buf, "Reply-To: <%s>\r\n", reply_to);
+	}
+	dsbPrintf(buf, "X-Mailer: Cleancode.email v%s \r\n", EMAIL_VERSION);
+	if (Mopts.priority) {
+		dsbPrintf(buf, "X-Priority: 1\r\n");
+	}
+	printExtraHeaders(Mopts.headers, buf);
+
+	// MIME-Version
+	dsbCat (buf, "MIME-Version: 1.0\r\n");
+}
+
+void printSubjectHeader (char *subject, bool encoding, dstrbuf *buf)
+{
+	dstrbuf *dsb = NULL;
+	if (subject) {
+		if (encoding) {
+			dsb = detectCharSetAndEncode (subject);
+			if (dsb) subject = dsb->str;
+		}
+		dsbPrintf(buf, "Subject: %s\r\n", subject);
+		dsbDestroy(dsb);
+	}
+}
+
+void printRecipientsHeaders(const char *type, dlist receipients, dstrbuf *msg)
+{
+	if (receipients == NULL) return;
+
+	struct addr *a = (struct addr *)dlGetNext(receipients);
+	dsbPrintf (msg, "%s: ", type);
+	while (a != NULL)
+	{
+		dstrbuf *tmp = formatEmailAddr(a->name, a->email);
+		dsbPrintf(msg, "%s", tmp->str);
+		dsbDestroy(tmp);
+		a = (struct addr *)dlGetNext(receipients);
+		if (a != NULL) {
+			dsbCat (msg, ", ");
+		} else {
+			dsbCat (msg, "\r\n");
+		}
+	}
+}
+
+/**
+ * just prints the to headers, and cc headers if available
+**/
+void printToHeaders (dlist to, dlist cc, dstrbuf *msg)
+{
+	printRecipientsHeaders ("To", to, msg);
+	printRecipientsHeaders ("Cc", cc, msg);
+}
+
+/**
+ * Bcc gets a special function because it's not always printed for standard
+ * Mail delivery.  Only if sendmail is going to be invoked, shall it be printed
+ * reason being is because sendmail needs the Bcc header to know everyone who
+ * is going to recieve the message, when it is done with reading the Bcc headers
+ * it will remove this from the headers field.
+**/
+void printBccHeader (dlist bcc, dstrbuf *msg)
+{
+	printRecipientsHeaders ("Bcc", bcc, msg);
+}
+
+/** Print From Headers **/
+void printFromHeader (char *name, char *address, dstrbuf *msg)
+{
+	dstrbuf *addr = formatEmailAddr(name, address);
+	dsbPrintf(msg, "From: %s\r\n", addr->str);
+	dsbDestroy(addr);
+}
+
+/** Print Date Headers **/
+void printDateHeader (dstrbuf *msg)
+{
+	time_t set_time;
+	struct tm *lt;
+	char buf[MAXBUF] = { 0 };
+
+	set_time = time(&set_time);
+
+#ifdef USE_GMT
+	lt = gmtime(&set_time);
+#else
+	lt = localtime(&set_time);
+#endif
+
+#ifdef USE_GNU_STRFTIME
+	strftime(buf, MAXBUF, "%a, %d %b %Y %H:%M:%S %z", lt);
+#else
+	strftime(buf, MAXBUF, "%a, %d %b %Y %H:%M:%S %Z", lt);
+#endif
+
+	dsbPrintf(msg, "Date: %s\r\n", buf);
+}
+
+void printExtraHeaders (dlist headers, dstrbuf *msg)
+{
+	char *hdr=NULL;
+	while ((hdr = (char *)dlGetNext(headers)) != NULL) {
+		dsbPrintf(msg, "%s\r\n", hdr);
+	}
+}
+
+void printContentHeaders (ContentHeaders headers, dstrbuf *buf)
+{
+	// Content-Type and parameters
+	if (headers.contentType.baseType)
+		dsbPrintf (buf, "Content-Type: %s", headers.contentType.baseType);
+	else if (headers.contentType.primaryType)
+		dsbPrintf (buf, "Content-Type: %s/%s", headers.contentType.primaryType, headers.contentType.subType);
+
+	if (headers.contentType.paramBoundary)
+		dsbPrintf (buf, "; boundary=\"%s\"", headers.contentType.paramBoundary);
+	if (headers.contentType.paramCharset)
+		dsbPrintf (buf, "; charset=%s", headers.contentType.paramCharset);
+	if (headers.contentType.paramProtocol)
+		dsbPrintf (buf, "; protocol=\"%s\"", headers.contentType.paramProtocol);
+	if (headers.contentType.paramMicalg)
+		dsbPrintf (buf, "; micalg=\"%s\"", headers.contentType.paramMicalg);
+	if (headers.contentType.paramName)
+		dsbPrintf (buf, "; name=\"%s\"", headers.contentType.paramName);
+	if (headers.contentType.paramStart)
+		dsbPrintf (buf, "; start=\"%s\"", headers.contentType.paramStart);
+	dsbCat (buf, "\r\n");
+
+	// Content-Transfer-Encoding
+	if (headers.contentTransferEncoding)
+		dsbPrintf (buf, "Content-Transfer-Encoding: %s\r\n", headers.contentTransferEncoding);
+
+	// Content-Disposition and parameters
+	if (headers.contentDisposition.dispositionType)
+	{
+		dsbPrintf (buf, "Content-Disposition: %s", headers.contentDisposition.dispositionType);
+
+		if (headers.contentDisposition.paramFilename)
+			dsbPrintf (buf, "; filename=\"%s\"", headers.contentDisposition.paramFilename);
+		if (headers.contentDisposition.paramCreationTime)
+			dsbPrintf (buf, "; creation-date=\"%s\"", headers.contentDisposition.paramCreationTime);
+		if (headers.contentDisposition.paramModificationTime)
+			dsbPrintf (buf, "; modification-date=\"%s\"", headers.contentDisposition.paramModificationTime);
+		if (headers.contentDisposition.paramAccessTime)
+			dsbPrintf (buf, "; read-date=\"%s\"", headers.contentDisposition.paramAccessTime);
+		if (headers.contentDisposition.paramSize)
+			dsbPrintf (buf, "; size=\"%s\"", headers.contentDisposition.paramSize);
+
+		dsbCat (buf, "\r\n");
+	}
+	// Content-ID
+	if (headers.contentID)
+		dsbPrintf (buf, "Content-ID: <%s>\r\n", headers.contentID);
+	// Content-Language
+	if (headers.contentLanguage)
+		dsbPrintf (buf, "Content-Language: %s\r\n", headers.contentLanguage);
+	// Content-Description
+	if (headers.contentDescription)
+		dsbPrintf (buf, "Content-Description: %s\r\n", headers.contentDescription);
+	// Content-MD5
+	if (headers.contentMD5)
+		dsbPrintf (buf, "Content-MD5: %s\r\n", headers.contentMD5);
+	// Content-Location
+	if (headers.contentLocation)
+		dsbPrintf (buf, "Content-Location: %s\r\n", headers.contentLocation);
+	// Content-Base
+	if (headers.contentBase)
+		dsbPrintf (buf, "Content-Base: %s\r\n", headers.contentBase);
+}
+
+void printHeaders (dlist headers, dstrbuf *buf)
+{
+	Header *header;
+	while ((header = dlGetNext(headers)) != NULL)
+	{
+		printHeader (header, buf);
+	}
+}
+void printHeader (Header *header, dstrbuf *buf)
+{
+	dsbPrintf (buf, "%s: \"%s\"", header->name, header->value);
+	char *param;
+	while ((param = dlGetNext(header->parameters)) != NULL)
+	{
+		dsbPrintf (buf, "; %s", param);
+	}
+	dsbCat (buf, "\r\n");
+}
+
+/*
+According to http://tools.ietf.org/html/rfc5321#section-4.5.2,
+ if 1st character of a line is '.', it should be duplicated.
+Data transparency is only needed in plain content (text or HTML) and quoted-printable content,
+GPG content, BASE64 content needn't it, because normally there're no '.' in it.
+
+Data transparency SHOULD be processed when sending email data, but it's better
+ processed here when "writing" mail, because not all data need to be transparency, as mentioned above.
+
+Params:
+    dst: Destination string buffer
+    src: The whole source message. Use this function on separated messages is not recommended.
+*/
+int provisionForDataTransparency (dstrbuf *dst, const char *src)
+{
+	int nLen = strlen (src);
+	const char *pLeft = src, *pRight = src;
+	bool bNewLine = true;
+	// Sample source string: ".aaa\n.bbb.c\ncc.ddd"
+	for (pRight=src; pRight-pLeft<=nLen; pRight++)
+	{
+		if (*pRight=='\r' || *pRight=='\n')
+		{
+			bNewLine = true;
+			continue;
+		}
+
+		if (*pRight=='.' && bNewLine)
+		{
+			dsbnCat(dst, pLeft, pRight-pLeft+1);	// "." and "aaa\n."
+			dsbCatChar (dst, '.');
+			pRight ++;
+			pLeft = pRight;
+		}
+		bNewLine = false;
+	}
+	dsbnCat(dst, pLeft, pRight-pLeft+1);	// the remaining: "bbb.c\ncc.ddd"
+	// Sample result string: "..aaa\n..bbb.c\ncc.ddd"
+	return SUCCESS;
+}
+
+void deleteMimeMessage (MimeMessage *mm)
+{
+	deleteMimeMultiPart (mm);
+}
+
+void deleteMimeMultiPart (MimeMultiPart *mmp)
+{
+	assert (mmp);
+	// Headers begin
+	if (! mmp->parent)
+	{
+		//deleteMailHeaders (mmp);
+	}
+	// Content Headers
+	deleteContentHeaders (mmp->contentHeaders);
+
+	if (mmp->otherHeaders)
+		dlDestroy (mmp->otherHeaders);
+	// Headers end
+
+	if (mmp->isMultiPartContent)
+	{
+		MimeMultiPart *bodyPart;
+		while ((bodyPart = (MimeMultiPart *)dlGetNext(mmp->content)) != NULL) {
+			deleteMimeMultiPart (bodyPart);
+		}
+	}
+	else if (mmp->content)
+	{
+		dstrbuf *msg = (dstrbuf *)(mmp->content);
+		dsbDestroy (msg);
+	}
+
+	xfree (mmp);
+}
+
+void deleteContentHeaders (ContentHeaders headers)
+{
+	// Content-Type and parameters
+	xfree (headers.contentType.baseType);
+	xfree (headers.contentType.paramBoundary);
+	xfree (headers.contentType.paramCharset);
+	xfree (headers.contentType.paramProtocol);
+	xfree (headers.contentType.paramMicalg);
+	xfree (headers.contentType.paramName);
+	xfree (headers.contentType.paramStart);
+	xfree (headers.contentType.paramType);
+	xfree (headers.contentType.paramID);
+
+	// Content-Transfer-Encoding
+	//xfree (headers.contentTransferEncoding);
+
+	// Content-Disposition and parameters
+	if (headers.contentDisposition.dispositionType)
+	{
+		//xfree (headers.contentDisposition.dispositionType);
+
+		xfree (headers.contentDisposition.paramFilename);
+		xfree (headers.contentDisposition.paramCreationTime);
+		xfree (headers.contentDisposition.paramModificationTime);
+		xfree (headers.contentDisposition.paramAccessTime);
+		xfree (headers.contentDisposition.paramSize);
+	}
+	xfree (headers.contentID);
+	xfree (headers.contentLanguage);
+	xfree (headers.contentDescription);
+	xfree (headers.contentMD5);
+	xfree (headers.contentLocation);
+	xfree (headers.contentBase);
+}
+
+void headerDestroyer (void *header)
+{
+	if (!header) return;
+
+	Header *h = (Header *)header;
+	xfree (h->name);
+	xfree (h->value);
+	xfree (h);
+}

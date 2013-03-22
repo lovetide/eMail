@@ -44,6 +44,7 @@
 /* EMAIL_DIR determined at compile time */
 #define MAIN_CONFIG  EMAIL_DIR"/email.conf"
 #define EMAIL_HELP_FILE   EMAIL_DIR"/email.help"
+#define MAGIC_FILE EMAIL_DIR "/mime.types"
 
 /* Debugger */
 #define DEBUG(str)                             \

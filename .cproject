@@ -39,7 +39,7 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/dlib/src}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/src}&quot;"/>
 								</option>
-								<option id="gnu.c.compiler.option.misc.other.238862472" name="Other flags" superClass="gnu.c.compiler.option.misc.other" value="-c -fmessage-length=0 -DEMAIL_VERSION='&quot;3.2.0-git&quot;' -DEMAIL_DIR='&quot;/etc/email&quot;' -DHAVE_CONFIG_H -DUSE_GNU_STRFTIME" valueType="string"/>
+								<option id="gnu.c.compiler.option.misc.other.238862472" name="Other flags" superClass="gnu.c.compiler.option.misc.other" value="-D_DEBUG=1 -c -fmessage-length=0 -DEMAIL_VERSION='&quot;3.2.0-git&quot;' -DEMAIL_DIR='&quot;/etc/email&quot;' -DHAVE_CONFIG_H -DUSE_GNU_STRFTIME" valueType="string"/>
 								<option id="gnu.c.compiler.option.misc.pic.534852201" name="Position Independent Code (-fPIC)" superClass="gnu.c.compiler.option.misc.pic" value="false" valueType="boolean"/>
 								<inputType id="cdt.managedbuild.tool.gnu.c.compiler.input.1431479497" superClass="cdt.managedbuild.tool.gnu.c.compiler.input"/>
 							</tool>

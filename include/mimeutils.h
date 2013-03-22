@@ -29,5 +29,7 @@ dstrbuf *mimeFilename(const char *in_name);
 dstrbuf *mimeQpEncodeString(const u_char *str, bool wrap);
 int mimeB64EncodeFile(FILE *in, dstrbuf *out);
 dstrbuf *mimeB64EncodeString(const u_char *inbuf, size_t len, bool maxline);
+dstrbuf *mimeEncodeWord (const u_char *str, bool use_qp, const char *charset, const char *lang);
+void printEncodeWord (dstrbuf *buf, dstrbuf *sbEncoded, bool use_qp, const char *charset, const char *lang);
 
 #endif /* _MIMEUTILS_H */

@@ -72,7 +72,6 @@ mimeFilename(const char *in_name)
  * something that does not look like a mime type, then
  * application/unknown is returned.
 **/
-#define MAGIC_FILE EMAIL_DIR "/mime.types"
 
 dstrbuf *
 mimeFiletype(const char *filename)
@@ -336,15 +335,6 @@ mimeQpEncodeString(const u_char *str, bool wrap)
 			dsbPrintf(out, "\r\n");
 			line_len = 0;
 			break;
-		case '.':
-			if (line_len == 0)
-			{
-				// If the 1st character in a line is '.', then it should be duplicated.
-				// See http://tools.ietf.org/html/rfc5321#section-4.5.2
-				qpStdout('.', &line_len, out, wrap);
-			}
-			qpStdout('.', &line_len, out, wrap);
-			break;
 		default:
 			if (qpIsEncodable(*str)) {
 				qpEncout(*str, &line_len, out, wrap);
@@ -355,5 +345,53 @@ mimeQpEncodeString(const u_char *str, bool wrap)
 		}
 	}
 	return out;
+}
+
+/*
+ * @parameters
+ * charset: character set
+ * lang: language code, such as "en", "es", "zh_CN", etc. See http://tools.ietf.org/html/rfc2231#section-5
+ */
+dstrbuf *mimeEncodeWord (const u_char *str, bool use_qp, const char *charset, const char *lang)
+{
+	const u_int max_blk_len = 45;
+	u_int i=max_blk_len;
+	dstrbuf *enc, *dsb = DSB_NEW;
+	size_t len = strlen((char *)str);
+
+	if (use_qp) {
+		// TODO: We need to break this up so that we're not
+		// TODO: Use Q-Encoding instead of quoted-printable encoding. See http://en.wikipedia.org/wiki/MIME#Difference_between_Q-encoding_and_quoted-printable
+		// creating extra long strings.
+		enc = mimeQpEncodeString(str, false);
+		i = len; // Just reset for now.
+	} else {
+		enc = mimeB64EncodeString(str,
+			(len > max_blk_len ? max_blk_len : len), false);
+	}
+	printEncodeWord (dsb, enc, use_qp, charset, lang);
+
+	/* If we have anymore data to encode, we have to do it by adding a newline
+	   plus a space because each section can only be 75 chars long. */
+	while (i < len) {
+		size_t newlen = strlen((char *)str + i);
+		/* only allow max_blk_len sections */
+		if (newlen > max_blk_len) {
+			newlen = max_blk_len;
+		}
+		enc = mimeB64EncodeString(str + i, newlen, false);
+		printEncodeWord (dsb, enc, use_qp, charset, lang);
+		dsbDestroy(enc);
+		i += newlen;
+	}
+	return dsb;
+}
+void printEncodeWord (dstrbuf *buf, dstrbuf *sbEncoded, bool use_qp, const char *charset, const char *lang)
+{
+	dsbPrintf(buf, "=?%s", charset);
+	if (lang)
+		dsbPrintf(buf, "*%s", lang);
+	dsbPrintf(buf, "?%c?%s?=", (use_qp?'Q':'B'), sbEncoded->str);
+	dsbDestroy(buf);
 }
 

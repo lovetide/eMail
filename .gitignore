@@ -1,2 +1,5 @@
 autom4te.cache
 dist
+*.o
+Debug
+Release
